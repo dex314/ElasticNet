@@ -4,7 +4,8 @@ WES.2018.03.01
 
 import numpy as np
 import numpy.random as npr
-from scipy.special import psi, gammaln
+from scipy.special import psi
+from scipy.special import gammaln
 from collections import namedtuple
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -15,9 +16,7 @@ from sklearn.preprocessing import StandardScaler
 class ElasticNet(object):
     '''
     This is a single use Elastic Net method for solving a Linear Equation.
-    It can be used for a Gaussian, Poisson, Negative Binomial, or Logit distributions.
-
-    Calling the fit method with no inputs allows you to develop your own cross validation method if needed.
+    It can be used for a Normal, Negative Binomial, or Logit distribution.
 
     Initializations:
         x = feature variable(s)
@@ -35,9 +34,15 @@ class ElasticNet(object):
         manual_lam_seq (default is None)
             For providing a manual lambda sequence. Must pass an array.
             Resets the depth to len(manual_lam_seq)-1!!!
+        lambda_scaling (default is False)
+            This scales the target in the lambda generator by the
+            std_dev(target). Useful in some cases for count data models
+            with low pick up on the initial lambda sequence.
+        random_state (default is None, should be Int)
+            A random_state useful for testing.
 
     Methods:
-        lam_seq_gen(x, y, offset=1, alpha=1, nlen=20):
+        lam_seq_gen(x, y, offset=1, alpha=1, nlen=20, lambda_scaling=False):
             takes the passed x and y and develops the lambda sequence
         cost(x, y, b0, b, k, lam, offset=1, alpha=1, fam):
             cost function for the optimization
@@ -61,19 +66,27 @@ class ElasticNet(object):
         from ___.___ import ElasticNet as enet
         from enetUtils import *
         lags = 1
-        xL = lagDf(xData, lags) #potential call to lag a data frame
+        xL = lagDf(xData, lags)
         mod = enet.ElasticNet(xL, yB, offset=None, x_std=True, y_std=False,
                               alpha=1.0, depth=20, tol=tols, fam='Gauss',
-                              manual_lam_seq=None)
+                              manual_lam_seq=None, random_state=42)
         fit = mod.fit()
 
     '''
     def __init__(self, x, y, offset=None, x_std=False, y_std=False,
                  alpha=1.0, depth=20, tol=1e-4, fam='NegBin',
-                 manual_lam_seq=None):
+                 manual_lam_seq=None,
+                 lambda_scaling=False, random_state=None):
         ''' initialize '''
         self.x_std = x_std
         self.y_std = y_std
+
+        if random_state is None:
+            pass
+        else:
+            assert type(random_state) == int, "Random state must be int."
+            npr.seed(random_state)
+        self.random_state = random_state
 
         if type(x) == pd.core.frame.DataFrame:
             self.param_nm = x.columns
@@ -91,8 +104,11 @@ class ElasticNet(object):
             if len(np.shape(y)) > 1:
                 self.y = ss.fit_transform(y)
             else:
-                #y = ss.fit_transform(y[:, None])[:, 0]
-                self.y = ss.fit_transform(y.reshape(-1,1))
+                try:
+                    ## PANDAS VERSION > 0.22 CATCH - NEED TO IMPROVE THIS
+                    self.y = ss.fit_transform(y.reshape(-1,1))
+                except: ## PANDAS VERSION > 0.22 CATCH
+                    self.y = ss.fit_transform(y.values.reshape(-1,1))
         else:
             self.y = np.array(y)
 
@@ -100,7 +116,7 @@ class ElasticNet(object):
             self.y = np.array(np.where(y>0,1,0))
             ## this changes the target to a binary set
 
-        if len(np.shape(self.y))>1:
+        if self.y.ndim < 2: #len(np.shape(self.y))>1:
             pass
         else:
             self.y = np.reshape(self.y, (len(self.y),1))
@@ -112,16 +128,19 @@ class ElasticNet(object):
                     self.offset = np.ones(self.y.shape)
                 else:
                     self.offset = offset * np.ones(self.y.shape)
+            else:
+                self.offset = offset
         else:
             self.offset = np.ones(self.y.shape)
 
         assert len(self.offset) == len(self.y), "Length of Offset != Length of y"
-        self.offset = np.reshape(self.offset, (len(self.offset),1))
+        # self.offset = np.reshape(self.offset, (len(self.offset),1))
 
         self.alpha = alpha
         self.depth = depth
         self.tol = tol
         self.family = fam
+        self.lambda_scaling = lambda_scaling
 
         ##FORMAT LAMBDA SEQ NOW
         mx, nx = np.shape(self.x)
@@ -132,25 +151,24 @@ class ElasticNet(object):
             b0_init = np.mean(self.y,axis=0)
         if fam == 'Logit':
             b0_init = np.log(np.mean(self.y,axis=0)/(1-np.mean(self.y,axis=0)))
-        ## CHECKING FOR MULTIVARIABLE TARGET
+        ## CHECKING FOR MULTIVARIABLE TARGET AND STACKING
         if ny > 1:
             xstack = np.matlib.repmat(self.x, ny, 1)
             ystack = np.reshape(self.y, (my*ny,1), order='F')
             ofstack = np.reshape(self.offset, (my*ny,1), order='F')
-        if ny>1:
-            fStackCase = {'NegBin': ystack - np.exp(b0_init + np.log(ofstack)),
-                          'Poisson': ystack - np.exp(b0_init + np.log(ofstack)),
-                          'Gauss': ystack - b0_init,
-                          'Logit': ystack - self.sigmoid(b0_init)}
-            funstack = fStackCase[self.family]
-            lams = self.lam_seq_gen(xstack, funstack, ofstack, self.alpha, 100)
+            f_case = {'NegBin': ystack - np.exp(b0_init + np.log(ofstack)),
+                      'Poisson': ystack - np.exp(b0_init + np.log(ofstack)),
+                      'Gauss': ystack - b0_init,
+                      'Logit': ystack - self.sigmoid(b0_init)}
+            fc_fam = f_case[self.family]
+            lams = self.lam_seq_gen(xstack, fc_fam, ofstack, self.alpha, 100, self.lambda_scaling)
         else:
-            fCase = {'NegBin': self.y - np.exp(b0_init + np.log(self.offset)),
-                     'Poisson': self.y - np.exp(b0_init + np.log(self.offset)),
-                     'Gauss': self.y - b0_init,
-                     'Logit': self.y - self.sigmoid(b0_init)}
-            fun = fCase[self.family]
-            lams = self.lam_seq_gen(self.x, fun, self.offset, self.alpha, 100)
+            f_case = {'NegBin': self.y - np.exp(b0_init + np.log(self.offset)),
+                      'Poisson': self.y - np.exp(b0_init + np.log(self.offset)),
+                      'Gauss': self.y - b0_init,
+                      'Logit': self.y - self.sigmoid(b0_init)}
+            fc_fam = f_case[self.family]
+            lams = self.lam_seq_gen(self.x, fc_fam, self.offset, self.alpha, 100, self.lambda_scaling)
         self.lams = lams
 
         if manual_lam_seq is None:
@@ -166,18 +184,15 @@ class ElasticNet(object):
         self.manual_lam_seq = manual_lam_seq
 
     #%% LOG LAMBDA SEQUENCE FUNCTION===========================================
-    def lam_seq_gen(self, x, y, offset=1, alpha=1, nlen=100):
+    def lam_seq_gen(self, x, y, offset=1, alpha=1, nlen=100, lambda_scaling=False):
         ''' lambda sequence generator '''
         m,n = np.shape(x)
-        ## addition to assist with sizing problems coming from the offset and y
-        ## if y is not already standardized
-        if np.mean(np.abs( np.dot(y.T,y) - len(y) )) < 1e-2:
-            pass
-        else:
+        if lambda_scaling == True:
             y = y / np.std(y)
 
         if m>n:  lam_ratio = 0.0001
         else:    lam_ratio = 0.01
+        # lam_max = np.max( np.abs( np.dot(x.T,y) ) ) / m
         lam_max = np.max( np.abs( np.dot(x.T,y) ) ) / m
         if alpha != 0:  lam_max = lam_max / alpha
         else:           lam_max = lam_max / 0.001
@@ -198,11 +213,13 @@ class ElasticNet(object):
         my, ny = np.shape(y)
 
         b_init = np.zeros((nx,1))
-        if fam == 'NegBin' or fam == 'Poisson':
+        if fam == 'NegBin':
             b0_init = np.log( np.mean(y/ofs, axis=0))
             k_init, it_dummy = self.disp_est(X, y, b0_init, b_init, ofs, 1)
-            if fam == 'Poisson':
-                k_init, it_dummy = 1e-5, 0
+            dev = self.devi(X, y, b0_init, b_init, k_init, ofs, fam)
+        if fam == 'Poisson':
+            b0_init = np.log( np.mean(y/ofs, axis=0))
+            k_init, it_dummy = 1e-5, 0
             dev = self.devi(X, y, b0_init, b_init, k_init, ofs, fam)
         if fam == 'Gauss':
             b0_init = np.mean(y,axis=0)
@@ -220,7 +237,7 @@ class ElasticNet(object):
         if np.isnan(b0_init).any() == True:
             raise Exception("The value of b0 is NAN. Confirm y is NOT standardized.")
 
-        ##Storage Containers for Variables--------------------------------------
+        ##Storage Methods for Variables----------------------------------------
         minL = min(self.depth, 100)
         betas = np.zeros((nx, minL))
         beta0s = np.zeros((1, minL))
@@ -250,12 +267,12 @@ class ElasticNet(object):
 
             if fam == 'NegBin' or fam == 'Poisson':
                 model_dev = self.devi(X,y,b0_init,b_init,k_init,ofs,fam=fam)
-                r = np.divide(np.subtract(dev,model_dev),dev)
+                r = (dev-model_dev)/dev ## these are scalars no need to numpy it
                 if r > 0.9:  break
                 yhat = np.exp(b0_init + X.dot(b_init) + np.log(ofs))
             if fam == 'Logit':
                 model_dev = self.devi(X,y,b0_init,b_init,k_init,ofs,fam=fam)
-                r = np.divide(np.subtract(dev,model_dev),dev)
+                r = (dev-model_dev)/dev ## these are scalars no need to numpy it
                 if r > 0.9:  break
                 yhat = self.sigmoid(b0_init + X.dot(b_init))
             else:
@@ -272,13 +289,13 @@ class ElasticNet(object):
             if k_init <= 1e-4:
                 self.DispersionNote = "Dispersion reached < 1e-4, consider running a Poisson."
 
-        ## MIN OUT OF SAMPLE ERROR PREDICTION - PICKING LOWEST LAMBDA WITH AT LEAST 2 BETAS
+        ## MIN OUT OF SAMPLE ERROR PREDICTION - PICKING LOWEST LAMBDA
         min_errlm_idx = np.where(mod_err == np.nanmin(mod_err))[0][0]
-        betaCntChk = np.sum(betas[:,min_errlm_idx]!=0)
-        while betaCntChk < 2 and min_errlm_idx < self.depth-1:
+        beta_cnt_chk = np.sum(betas[:,min_errlm_idx]!=0)
+        while beta_cnt_chk < 2 and min_errlm_idx < self.depth-1:
             self.min_errlm_idx_note = 'Min lambda error had no Betas - moving forward until there are at least 2.'
             min_errlm_idx += 1
-            betaCntChk = np.sum(betas[:,min_errlm_idx]!=0)
+            beta_cnt_chk = np.sum(betas[:,min_errlm_idx]!=0)
 
         self.B = betas
         self.B0 = beta0s
@@ -325,7 +342,7 @@ class ElasticNet(object):
 
         if fam == 'Gauss':
             w = np.ones((len(y),1))
-            z = y
+            z = y.copy()
         if fam == 'NegBin':
             p = np.exp(b0_init + np.add(x.dot(b_init), np.log(offset)))
             s = np.divide( ((k*y+1.0)*p) , (k*p + 1.0)**2 )
@@ -333,6 +350,7 @@ class ElasticNet(object):
             w = np.ones((len(y),1))*s
             z = b0_init + np.add(x.dot(b_init), np.subtract(y,p)*q0)
         if fam == 'Logit':
+            # p = 1.0 / (1.0 + np.exp(-(b0_init + np.dot(x,b_init))))
             p = self.sigmoid(b0_init + np.dot(x,b_init))
             s = np.multiply( p, (1.0-p) )
             q0 =  np.divide( (y-p) , s )
@@ -344,11 +362,18 @@ class ElasticNet(object):
             w = np.ones((len(y),1))*p
             z =  b0_init + np.add(x.dot(b_init), q0)
 
+        wsum = np.sum(w)
+        xsize = x.size
         while tol_chk >= tol and npass<1000:
             npass+=1
-            b0 = np.dot( w.T, np.subtract(z, np.dot(x,b))) / np.sum(w)
-            if x.size != 0:
+            b0 = np.dot( w.T, np.subtract(z, np.dot(x,b))) / wsum
+            if xsize != 0:
                 for ii in range(0,n):
+                    # ## inner non-zero check TW was talking about????
+                    # if npass>1 and np.fabs(b[ii]) == 0: # <= 1e-16:
+                    #     # b_init[ii] = b[ii]
+                    #     continue
+                    # else:
                     xi = x[:,[ii]]
                     b[ii] = np.dot(xi.T, ( w*(np.subtract(z, np.dot(x,b)) - b0 + xi*b[ii]) ) )/m
                     f = np.abs(b[ii]) - alpha*lam
