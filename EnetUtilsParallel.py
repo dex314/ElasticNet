@@ -5,6 +5,7 @@
 
 import numpy as np
 import numpy.random as npr
+import numpy.matlib as npm
 from scipy.special import psi
 from scipy.special import gammaln
 from collections import namedtuple, Counter
@@ -162,9 +163,9 @@ class CrossVal(object):
         ## the tile stack sorts out one set of Betas for all y vectors
         ## it makes zero sense to perform a kornecker stack when its the
         ## same as doing each item in the y variables separately
-        xts = np.matlib.repmat(xt, ny, 1)
+        xts = npm.repmat(xt, ny, 1)
         yts = np.reshape(yt,(np.shape(yt)[0]*np.shape(yt)[1],1),order='F')
-        xvs = np.matlib.repmat(xv, ny, 1)
+        xvs = npm.repmat(xv, ny, 1)
         yvs = np.reshape(yv,(np.shape(yv)[0]*np.shape(yv)[1],1),order='F')
 
         ots = np.reshape(ot,(np.shape(ot)[0]*np.shape(ot)[1],1),order='F')
