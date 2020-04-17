@@ -4,6 +4,7 @@ WES.2018.03.01
 
 import numpy as np
 import numpy.random as npr
+import numpy.matlib as npm
 from scipy.special import psi
 from scipy.special import gammaln
 from collections import namedtuple
@@ -153,7 +154,7 @@ class ElasticNet(object):
             b0_init = np.log(np.mean(self.y,axis=0)/(1-np.mean(self.y,axis=0)))
         ## CHECKING FOR MULTIVARIABLE TARGET AND STACKING
         if ny > 1:
-            xstack = np.matlib.repmat(self.x, ny, 1)
+            xstack = npm.repmat(self.x, ny, 1)
             ystack = np.reshape(self.y, (my*ny,1), order='F')
             ofstack = np.reshape(self.offset, (my*ny,1), order='F')
             f_case = {'NegBin': ystack - np.exp(b0_init + np.log(ofstack)),
