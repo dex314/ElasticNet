@@ -24,6 +24,8 @@ The utils contain the following:
         dev_plot(dev, figsize=(12,8))
     Field Vote Plot:
         fvc_plot(Bs, min_ce_idx, param_nm, figsize=(12,8))
+    Cross Val Scheme Visualization:
+        cv_graph(x, cv_its, n_ahead, figsize=(12,6))
 
 """
 
