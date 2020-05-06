@@ -300,3 +300,32 @@ def field_vote_plot(Bs, min_ce_idx, param_name, min_indices=None, figsize=(12,8)
     plt.yticks(np.arange(len(fulls.index)), fulls.index, fontsize=9)
 
     return full
+
+def cv_graph(x, cv_its, n_ahead, figsize=(12,6)):
+    ''' Function to plot the Cross Validation Scheme '''
+    m = len(x)
+    xidx = x.index
+    df = pd.DataFrame(index = xidx)
+    for i in range(cv_its):
+        mpi = m - cv_its + i
+        trn0 = int(i)
+        trnF = int(mpi-n_ahead)
+        val0 = int(mpi-n_ahead+1)
+        valF = int(mpi)
+        df['CV_{}'.format(i+1)] = 0
+        df['CV_{}'.format(i+1)] = 1*((df.index>=xidx[trn0])&(df.index<=xidx[trnF])) + \
+                -1*((df.index>=xidx[val0])&(df.index<=xidx[valF]))
+    
+    df.index = df.index.date
+    fig, ax=plt.subplots(1,1,figsize=figsize)
+    sns.heatmap(df.T, cmap='coolwarm', linewidth=1, cbar=False, ax=ax);
+    ax.set_title("Cross Validation Graph", fontsize=16);
+    ax.set_xlabel("Red = Train | Blue = Val | Gray = Unused", fontsize=16);
+    plt.xticks(rotation=35);
+    return df
+
+
+    
+    
+    
+    
